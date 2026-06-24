@@ -143,6 +143,26 @@ assert_exit 0 "quoted 'git push' as text in cwd=plan-repo -> ALLOW" \
 assert_exit 0 "double-quoted git push as text -> ALLOW" \
   "Bash" "echo \"remember to git push later\"" "$REPO_PLAN"
 
+# --- spaced / apostrophe path resolution (cd & git -C) ------------------------
+# Paths with spaces or apostrophes (e.g. an iCloud vault ".../Yen's Claude") must
+# resolve, not truncate at the first space. Regression guard for the cd/-C parser.
+SP_CLEAN="$HOME/.ship gate test 'clean'"   # spaces + apostrophe, NO .planning
+SP_PLAN="$HOME/.ship gate test plan"       # spaces, phase:plan -> should block
+rm -rf "$SP_CLEAN" "$SP_PLAN"
+mkdir -p "$SP_CLEAN/sub" "$SP_PLAN/.planning"
+echo "phase: plan" > "$SP_PLAN/.planning/state.md"
+_good_handoff "$SP_PLAN/.planning/handoff.md"
+trap 'rm -rf "$REPO_PLAN" "$REPO_SHIP" "$REPO_CLEAN" "$SP_CLEAN" "$SP_PLAN"; cleanup' EXIT INT TERM
+
+assert_exit 0 "cd \"spaced+apostrophe clean path\" && push (no .planning -> ALLOW)" \
+  "Bash" "cd \"$SP_CLEAN\" && git push origin main" "$REPO_PLAN"
+assert_exit 0 "git -C \"spaced clean path\" push (no .planning -> ALLOW)" \
+  "Bash" "git -C \"$SP_CLEAN\" push origin main" "$REPO_PLAN"
+assert_exit 2 "cd \"spaced plan path\" && push (phase:plan -> BLOCK)" \
+  "Bash" "cd \"$SP_PLAN\" && git push origin main" "$REPO_CLEAN"
+assert_exit 2 "var path cd \"\$X/y\" && push -> bails to cwd plan-repo (BLOCK)" \
+  "Bash" "cd \"\$X/y\" && git push origin main" "$REPO_PLAN"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

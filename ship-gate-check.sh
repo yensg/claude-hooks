@@ -39,12 +39,24 @@ fi
 # the command uses `git -C <path>` or `cd <path> && git push`.
 EFFECTIVE_DIR="$CWD_RESOLVED"
 
+# Extract the path argument after a keyword, handling "double-quoted", 'single-quoted',
+# and bare (space/&/;/|-terminated) forms — so paths WITH SPACES or apostrophes (e.g. an
+# iCloud vault "…/Yen's Claude") resolve instead of truncating at the first space.
+# $1 = command string, $2 = keyword regex (e.g. 'cd' or 'git[[:space:]]+-C').
+# Limitation: a path built from a shell variable (cd "$DIR/x") cannot be expanded by a
+# static parser — those are bailed below and fall back to the session CWD gate (safe default).
+_xpath() {
+  local cmd="$1" kw="$2" p
+  p=$(printf '%s' "$cmd" | sed -nE "s/.*${kw}[[:space:]]+\"([^\"]+)\".*/\\1/p"); [ -n "$p" ] && { printf '%s' "$p"; return; }
+  p=$(printf '%s' "$cmd" | sed -nE "s/.*${kw}[[:space:]]+'([^']+)'.*/\\1/p");   [ -n "$p" ] && { printf '%s' "$p"; return; }
+  printf '%s' "$cmd" | sed -nE "s/.*${kw}[[:space:]]+([^[:space:]&;|]+).*/\\1/p"
+}
+
 # Pattern: git -C <path> push ...
 if printf '%s' "$COMMAND" | grep -qE 'git[[:space:]]+-C[[:space:]]+'; then
-  _GIT_C=$(printf '%s' "$COMMAND" | grep -oE 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+' | head -1 | awk '{print $3}')
-  _GIT_C="${_GIT_C//\"/}"
-  _GIT_C="${_GIT_C//\'/}"
+  _GIT_C=$(_xpath "$COMMAND" 'git[[:space:]]+-C')
   _GIT_C="${_GIT_C/#\~/$HOME}"
+  case "$_GIT_C" in *'$'*) _GIT_C="";; esac   # unexpandable shell var — cannot resolve
   _GIT_C_RESOLVED=$(realpath "$_GIT_C" 2>/dev/null || echo "")
   if [ -n "$_GIT_C_RESOLVED" ] && [[ "$_GIT_C_RESOLVED" == "$HOME/"* ]]; then
     EFFECTIVE_DIR="$_GIT_C_RESOLVED"
@@ -52,11 +64,10 @@ if printf '%s' "$COMMAND" | grep -qE 'git[[:space:]]+-C[[:space:]]+'; then
 fi
 
 # Pattern: cd <path> && git push (only if git -C not already found)
-if [ "$EFFECTIVE_DIR" = "$CWD_RESOLVED" ] && printf '%s' "$COMMAND" | grep -qE 'cd[[:space:]]+'; then
-  _CD=$(printf '%s' "$COMMAND" | grep -oE 'cd[[:space:]]+[^[:space:]&]+' | head -1 | awk '{print $2}')
-  _CD="${_CD//\"/}"
-  _CD="${_CD//\'/}"
+if [ "$EFFECTIVE_DIR" = "$CWD_RESOLVED" ] && printf '%s' "$COMMAND" | grep -qE '(^|[^[:alnum:]_])cd[[:space:]]'; then
+  _CD=$(_xpath "$COMMAND" 'cd')
   _CD="${_CD/#\~/$HOME}"
+  case "$_CD" in *'$'*) _CD="";; esac        # unexpandable shell var — cannot resolve
   _CD_RESOLVED=$(realpath "$_CD" 2>/dev/null || echo "")
   if [ -n "$_CD_RESOLVED" ] && [[ "$_CD_RESOLVED" == "$HOME/"* ]]; then
     EFFECTIVE_DIR="$_CD_RESOLVED"
