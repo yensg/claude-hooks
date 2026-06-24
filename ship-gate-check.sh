@@ -11,14 +11,19 @@ TOOL="$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.
 
 COMMAND="$(printf '%s' "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")"
 
-# Detect push intent. Fixed-string "git push" catches the bare form; the regex
-# catches `git -C <path> push` where the -C flag splits "git" and "push" apart.
-# Detection only broadens coverage — a missed match just means the gate doesn't
-# apply, never a false block. Known limitation: may false-positive on commands
-# whose string content contains "git push" as text (e.g. prompts about git push).
-if ! printf '%s' "$COMMAND" | grep -qF "git push" && \
-   ! printf '%s' "$COMMAND" | grep -qE 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+push' && \
-   ! printf '%s' "$COMMAND" | grep -qF "gh pr create"; then
+# Strip single- and double-quoted substrings before detection so a push that
+# appears only as literal TEXT (echo, prompts, JSON payloads, diagnostics) does
+# not trip the gate. Real invocations — `git push`, `cd repo && git push`,
+# `git -C <path> push` — are unquoted and survive the strip, so they still match.
+DETECT="$(printf '%s' "$COMMAND" | sed "s/'[^']*'//g; s/\"[^\"]*\"//g")"
+
+# Detect push intent against the quote-stripped command. Fixed-string "git push"
+# catches the bare form; the regex catches `git -C <path> push` where the -C flag
+# splits "git" and "push" apart. A missed match just means the gate doesn't apply,
+# never a false block.
+if ! printf '%s' "$DETECT" | grep -qF "git push" && \
+   ! printf '%s' "$DETECT" | grep -qE 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+push' && \
+   ! printf '%s' "$DETECT" | grep -qF "gh pr create"; then
     exit 0
 fi
 
@@ -63,26 +68,26 @@ PLANNING="${EFFECTIVE_DIR}/.planning"
 
 # Reject symlinked .planning — prevents gate bypass via attacker-controlled state
 if [ -L "$PLANNING" ]; then
-    echo "SHIP BLOCKED: .planning/ is a symlink — cannot safely verify project state."
+    echo "SHIP BLOCKED: .planning/ is a symlink — cannot safely verify project state." >&2
     exit 2
 fi
 
 HANDOFF="${PLANNING}/handoff.md"
 if [ ! -f "$HANDOFF" ]; then
-    echo "SHIP BLOCKED: .planning/handoff.md missing. Run /context-save after /qa before shipping."
+    echo "SHIP BLOCKED: .planning/handoff.md missing. Run /context-save after /qa before shipping." >&2
     exit 2
 fi
 
 # Check handoff.md has actual content — template has multiple placeholder markers
 if grep -qE "^\[timestamp\]|^\[project\]|^\[status\]|\[next_action\]" "$HANDOFF" 2>/dev/null; then
-    echo "SHIP BLOCKED: .planning/handoff.md still has blank template content. Run /qa then /context-save first."
+    echo "SHIP BLOCKED: .planning/handoff.md still has blank template content. Run /qa then /context-save first." >&2
     exit 2
 fi
 
 # Minimum size — real context-save output is never tiny
 HANDOFF_SIZE="$(wc -c < "$HANDOFF" 2>/dev/null || echo 0)"
 if [ "$HANDOFF_SIZE" -lt 100 ]; then
-    echo "SHIP BLOCKED: .planning/handoff.md is too small (${HANDOFF_SIZE} bytes) — run /context-save first."
+    echo "SHIP BLOCKED: .planning/handoff.md is too small (${HANDOFF_SIZE} bytes) — run /context-save first." >&2
     exit 2
 fi
 
@@ -91,17 +96,17 @@ STATE="${PLANNING}/state.md"
 if [ -f "$STATE" ]; then
     PHASE_COUNT="$(grep -c '^phase:' "$STATE" 2>/dev/null || echo 0)"
     if [ "$PHASE_COUNT" -ne 1 ]; then
-        echo "SHIP BLOCKED: state.md has $PHASE_COUNT phase: lines (expected exactly 1). Fix state.md before shipping."
+        echo "SHIP BLOCKED: state.md has $PHASE_COUNT phase: lines (expected exactly 1). Fix state.md before shipping." >&2
         exit 2
     fi
     PHASE="$(grep '^phase:' "$STATE" | head -1 | sed 's/^phase:[[:space:]]*//' | tr -d '[:space:]\r')"
     if [ -z "$PHASE" ]; then
-        echo "SHIP BLOCKED: state.md phase is blank. Set phase to 'qa' or 'ship' before shipping."
+        echo "SHIP BLOCKED: state.md phase is blank. Set phase to 'qa' or 'ship' before shipping." >&2
         exit 2
     fi
     case "$PHASE" in
         qa|ship) ;;
-        *) echo "SHIP BLOCKED: state.md phase is '$PHASE'. Must be 'qa' or 'ship' before shipping."; exit 2 ;;
+        *) echo "SHIP BLOCKED: state.md phase is '$PHASE'. Must be 'qa' or 'ship' before shipping." >&2; exit 2 ;;
     esac
 fi
 

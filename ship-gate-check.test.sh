@@ -134,12 +134,14 @@ assert_exit 2 "symlinked .planning -> BLOCK" \
   "Bash" "$PUSH" "$SYMREPO"
 rm -rf "$SYMREPO"
 
-# --- known limitation (documented, not a bug we fix here) ---------------------
-# A command whose TEXT contains "git push" but is not a push will false-positive
-# when cwd is a blocking repo. Documented in hook comment. Asserted so the
-# behavior is intentional + visible, not silently changing.
-assert_exit 2 "KNOWN-LIMIT: 'git push' as text in cwd=plan-repo -> BLOCK" \
+# --- false-positive fix -------------------------------------------------------
+# A command whose TEXT only contains "git push" inside quotes (echo, docs, JSON
+# payloads) is NOT a push. The hook strips quoted substrings before detection, so
+# even in a blocking repo this is allowed. Previously a documented known-limit.
+assert_exit 0 "quoted 'git push' as text in cwd=plan-repo -> ALLOW" \
   "Bash" "echo 'docs about git push command'" "$REPO_PLAN"
+assert_exit 0 "double-quoted git push as text -> ALLOW" \
+  "Bash" "echo \"remember to git push later\"" "$REPO_PLAN"
 
 echo
 echo "Results: $PASS passed, $FAIL failed"
